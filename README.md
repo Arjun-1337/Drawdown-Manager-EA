@@ -130,69 +130,68 @@ Total Commission: XX.XX
 
 ---
 
-## 📊 Example Flow
+# 📊 Example Flow
 
-flowchart TD
-    A[Manual Trade Opened] --> B[EA Detects Main Trade]
-    B --> C[Places All Layers]
-    C --> D[Price Moves Against Main]
-    D --> E[Layers Triggered]
-    E --> F[Price Retraces Halfway to TP] --> G[Set Breakeven SL]
-    F --> H[Hit TP or Breakeven] --> C
-    E --> I[Continued Drawdown] --> J[Global SL Hit → Close All Trades]
+**Step-by-Step Process:**
+1. **Manual Trade Opened** → EA detects the main trade.
+2. **EA Places All Layers** according to parameters.
+3. **Price Moves Against Main Trade** → Layers get triggered.
+4. **Price Retraces Halfway to TP** → Stop Loss moves to breakeven.
+5. **Outcome**:
+   - If price reaches TP or breakeven → Process resets.
+   - If drawdown continues → Global SL is hit and all trades are closed.
 
-💡 Use Case & Benefits
-Drawdown Control — Smooths volatility impact via averaging.
+---
 
-Risk-Free Trades — Breakeven locking removes downside risk mid-trade.
+## 💡 Use Case & Benefits
+- **Drawdown Control** — Smooths volatility impact via averaging.  
+- **Risk-Free Trades** — Breakeven locking removes downside risk mid-trade.  
+- **Hands-Off Layer Management** — Fully automated after the initial manual trade.  
+- **Capital Protection** — Global SL ensures losses remain within defined limits.  
 
-Hands-Off Layer Management — Fully automated after initial manual trade.
+---
 
-Capital Protection — Global SL ensures losses remain within defined limits.
+## 📈 Performance Notes
+- Works best on liquid pairs with consistent volatility.  
+- Must be paired with a sound entry strategy.  
+- Test thoroughly in demo before live use.  
 
-📈 Performance Notes
-Works best on liquid pairs with consistent volatility.
+---
 
-Must be paired with a sound entry strategy.
+## 📂 File Structure
+- `DrawdownManagerEA.mq5` — Core EA source file.  
 
-Test thoroughly in demo before live use.
+---
 
-📂 File Structure
-DrawdownManagerEA.mq5 — Core EA source file.
+## 🚦 Installation & Usage
+1. Copy `.mq5` file into `MQL5/Experts/`  
+2. Compile via **MetaEditor**.  
+3. Attach to the desired chart.  
+4. Configure input parameters.  
+5. Open a manual trade (magic number `0`).  
+6. Let the EA manage layers, SL, and breakeven automatically.  
 
-🚦 Installation & Usage
-Copy .mq5 file into MQL5/Experts/
+> PRs welcome.
 
-Compile via MetaEditor.
+---
 
-Attach to the desired chart.
+## 📞 Contact
+- **Twitter:** [@Arjun1337](https://twitter.com/Arjun1337)  
+- **LinkedIn:** [Arjun Ashtankar](https://linkedin.com/in/arjun-ashtankar)  
+- **Email:** arjun@arjun.media  
 
-Configure input parameters.
+🔹 *Power your trades with discipline & precision — because winning is a system, not luck.*
 
-Open a manual trade (magic number 0).
-
-Let the EA manage layers, SL, and breakeven automatically.
-
-PRs welcome.
-
-📞 Contact
-Twitter: @Arjun1337
-
-LinkedIn: Arjun Ashtankar
-
-Email: arjun@arjun.media
-
-🔹 Power your trades with discipline & precision — because winning is a system, not luck.
+---
 
 ## 📌 Best Practices
-- Use on **one chart per account** to avoid duplicate SL updates.
-- Set realistic `MaxLossPercent` and `TargetProfitPerDay`.
-- Combine with a trusted entry strategy — this EA focuses on **management**, not signals.
+- Use on **one chart per account** to avoid duplicate SL updates.  
+- Set realistic `MaxLossPercent` and `TargetProfitPerDay`.  
+- Combine with a trusted entry strategy — this EA focuses on **management**, not signals.  
 
 ---
 
 ## 🧠 How It Works (Algorithm Flow)
-
 1. **Initialization**
    - Detects symbol specs, tick size/value, pip size, digits.
    - Prepares dashboard UI.
@@ -214,12 +213,14 @@ Email: arjun@arjun.media
 
 ---
 
-📜 License
-© 2025 Arjun1337 — All Rights Reserved.
-This EA is provided "as-is" without warranty. Use at your own risk.
+## 📜 License
+© 2025 **Arjun1337** — All Rights Reserved.  
+This EA is provided **"as-is"** without warranty. Use at your own risk.
 
-🤝 Contributions & Support
-Open a GitHub issue for bug reports or feature requests.
+---
+
+## 🤝 Contributions & Support
+Open a **GitHub issue** for bug reports or feature requests.
 
 ---
 
@@ -227,4 +228,6 @@ Open a GitHub issue for bug reports or feature requests.
 > “The market rewards discipline — not hope. The Drawdown Manager EA is your silent enforcer.”
 
 ---
+
 ![Footer Logo](https://via.placeholder.com/250x80.png?text=Arjun1337+Trading+Tools)
+
