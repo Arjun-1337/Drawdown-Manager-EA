@@ -3,18 +3,19 @@
 //|                         Drawdown Manager EA by Arjun1337         |
 //+------------------------------------------------------------------+
 #property copyright "Drawdown Manager EA by Arjun1337"
-#property version   "1.20"
+#property version   "1.22"
 #property strict
 
 #include <Trade\Trade.mqh>
 
-input uint    MagicNumber   = 133700;       // Magic for EA orders
-input double  BaseLotSize   = 0.01;         // base lot (layer1 = base * 1, layer2 = base * 2 ...)
-input int     PipDistance   = 100;          // distance between layers in pips (per layer)
-input int     TPpips        = 50;           // TP for each layer (in pips)
-input int     MaxLayers     = 10;           // maximum number of layers
-input string  CommentTag    = "DD_Manager"; // comment on orders
-input uint    Slippage      = 10;           // slippage in points
+input uint    MagicNumber     = 133700;       // Magic for EA orders
+input double  BaseLotSize     = 0.01;         // base lot (layer1 = base * 1, layer2 = base * 2 ...)
+input int     PipDistance     = 100;          // distance between layers in pips (per layer)
+input int     TPpips          = 50;           // TP for each layer (in pips)
+input int     MaxLayers       = 10;           // maximum number of layers
+input string  CommentTag      = "DD_Manager"; // comment on orders
+input uint    Slippage        = 10;           // slippage in points
+input double  MaxLossPercent  = 0.20;         // maximum allowed total loss as percent of equity (0.20 => 20%)
 
 CTrade trade;
 
@@ -32,6 +33,264 @@ int    volumeDigits;
 double PipsToPrice(int pips)
 {
    return (double)pips * pipPrice;
+}
+
+//+------------------------------------------------------------------+
+//| symbol tick helpers                                               |
+//+------------------------------------------------------------------+
+double GetTickSize()
+{
+   return SymbolInfoDouble(symbolName, SYMBOL_TRADE_TICK_SIZE);
+}
+double GetTickValue()
+{
+   return SymbolInfoDouble(symbolName, SYMBOL_TRADE_TICK_VALUE);
+}
+
+//+------------------------------------------------------------------+
+//| Compute global stop price that limits total loss to MaxLossPercent |
+//| Returns true + outStopPrice if computed successfully             |
+//+------------------------------------------------------------------+
+bool CalculateGlobalStopPrice(double lossPercent, double &outStopPrice)
+{
+   double equity = AccountInfoDouble(ACCOUNT_EQUITY);
+   double maxLoss = equity * lossPercent;
+   double tickSize  = GetTickSize();
+   double tickValue = GetTickValue();
+
+   if(tickSize <= 0.0 || tickValue <= 0.0)
+   {
+      Print("CalculateGlobalStopPrice: invalid tickSize/tickValue");
+      return false;
+   }
+
+   // Sum volumes and sum(volume * openPrice) for all relevant items (open positions + EA pending layers)
+   double sumVolOpen = 0.0;
+   double sumVol     = 0.0;
+
+   // include open positions on this symbol
+   int posTotal = PositionsTotal();
+   for(int p=0; p<posTotal; p++)
+   {
+      ulong posTicket = PositionGetTicket(p);
+      if(posTicket == 0) continue;
+      if(!PositionSelectByTicket(posTicket)) continue;
+      string psym = PositionGetString(POSITION_SYMBOL);
+      if(psym != symbolName) continue;
+
+      double vol = PositionGetDouble(POSITION_VOLUME);
+      double openP = PositionGetDouble(POSITION_PRICE_OPEN);
+      sumVolOpen += vol * openP;
+      sumVol     += vol;
+   }
+
+   // include pending EA layers (assume they will fill at their registered price)
+   int orders = OrdersTotal();
+   for(int i=0; i<orders; i++)
+   {
+      ulong ordTicket = OrderGetTicket(i);
+      if(ordTicket == 0) continue;
+      if(!OrderSelect(ordTicket)) continue;
+      if(OrderGetString(ORDER_SYMBOL) != symbolName) continue;
+      if((ulong)OrderGetInteger(ORDER_MAGIC) != (ulong)MagicNumber) continue;
+
+      double ordVol = OrderGetDouble(ORDER_VOLUME_INITIAL);
+      double ordPrice = OrderGetDouble(ORDER_PRICE_OPEN);
+      sumVolOpen += ordVol * ordPrice;
+      sumVol     += ordVol;
+   }
+
+   if(sumVol <= 0.0)
+   {
+      Print("CalculateGlobalStopPrice: total volume is zero -> nothing to protect.");
+      return false;
+   }
+
+   // Determine main direction. Default BUY if unknown
+   long mainType = POSITION_TYPE_BUY;
+   if(mainTicket != 0 && PositionSelectByTicket(mainTicket))
+      mainType = PositionGetInteger(POSITION_TYPE);
+
+   // coeff = maxLoss * tickSize / tickValue (units of price * volume)
+   double coeff = (maxLoss * tickSize) / tickValue;
+   double stopPrice = 0.0;
+
+   if(mainType == POSITION_TYPE_BUY)
+   {
+      // total_loss = (sumVolOpen - stopPrice * sumVol) / tickSize * tickValue = maxLoss
+      // => stopPrice = (sumVolOpen - coeff) / sumVol
+      stopPrice = (sumVolOpen - coeff) / sumVol;
+   }
+   else // SELL
+   {
+      // total_loss = (stopPrice * sumVol - sumVolOpen) / tickSize * tickValue = maxLoss
+      // => stopPrice = (coeff + sumVolOpen) / sumVol
+      stopPrice = (coeff + sumVolOpen) / sumVol;
+   }
+
+   outStopPrice = NormalizeDouble(stopPrice, priceDigits);
+
+   PrintFormat("CalculateGlobalStopPrice: equity=%.2f maxLoss=%.2f sumVol=%.2f sumVolOpen=%.10f -> stopPrice=%.10f",
+               equity, maxLoss, sumVol, sumVolOpen, outStopPrice);
+
+   return true;
+}
+
+//+------------------------------------------------------------------+
+//| Apply global stop price: set SL on open positions and pending orders |
+//+------------------------------------------------------------------+
+void ApplyGlobalStopPrice(double stopPrice)
+{
+   // Modify open positions (all positions on this symbol)
+   int posTotal = PositionsTotal();
+   for(int p=0; p<posTotal; p++)
+   {
+      ulong posTicket = PositionGetTicket(p);
+      if(posTicket == 0) continue;
+      if(!PositionSelectByTicket(posTicket)) continue;
+      if(PositionGetString(POSITION_SYMBOL) != symbolName) continue;
+
+      long ptype = PositionGetInteger(POSITION_TYPE);
+      double openP = PositionGetDouble(POSITION_PRICE_OPEN);
+      double curSL = PositionGetDouble(POSITION_SL);
+      double curTP = PositionGetDouble(POSITION_TP);
+
+      double newSL = stopPrice;
+
+      // ensure SL is a valid price relative to open price per direction
+      if(ptype == POSITION_TYPE_BUY)
+      {
+         if(newSL >= openP) newSL = NormalizeDouble(openP - pipPrice, priceDigits);
+      }
+      else // SELL
+      {
+         if(newSL <= openP) newSL = NormalizeDouble(openP + pipPrice, priceDigits);
+      }
+
+      // only modify if sufficiently different to avoid spamming
+      if(MathAbs(newSL - curSL) > (pipPrice * 0.5))
+      {
+         bool ok = trade.PositionModify(posTicket, newSL, curTP);
+         if(ok)
+            PrintFormat("ApplyGlobalStopPrice: modified position %I64u SL->%.10f", posTicket, newSL);
+         else
+            PrintFormat("ApplyGlobalStopPrice: failed to modify position %I64u SL->%.10f", posTicket, newSL);
+      }
+   }
+
+   // Modify EA pending orders so filled positions will inherit SL
+   int orders = OrdersTotal();
+   for(int i=0; i<orders; i++)
+   {
+      ulong ordTicket = OrderGetTicket(i);
+      if(ordTicket == 0) continue;
+      if(!OrderSelect(ordTicket)) continue;
+      if(OrderGetString(ORDER_SYMBOL) != symbolName) continue;
+      if((ulong)OrderGetInteger(ORDER_MAGIC) != (ulong)MagicNumber) continue;
+
+      double ordPrice = OrderGetDouble(ORDER_PRICE_OPEN);
+      long ordType = (long)OrderGetInteger(ORDER_TYPE);
+      double existingTP = OrderGetDouble(ORDER_TP);
+
+      double slToSet = stopPrice;
+      if(ordType == ORDER_TYPE_BUY_LIMIT || ordType == ORDER_TYPE_BUY_STOP)
+      {
+         if(slToSet >= ordPrice) slToSet = NormalizeDouble(ordPrice - pipPrice, priceDigits);
+      }
+      else // SELL pending
+      {
+         if(slToSet <= ordPrice) slToSet = NormalizeDouble(ordPrice + pipPrice, priceDigits);
+      }
+
+      // Build modify request
+      MqlTradeRequest req;
+      MqlTradeResult  res;
+      ZeroMemory(req);
+      ZeroMemory(res);
+      req.action = TRADE_ACTION_MODIFY;
+      req.order  = ordTicket;
+      req.symbol = symbolName;
+      req.sl     = NormalizeDouble(slToSet, priceDigits);
+      req.tp     = NormalizeDouble(existingTP, priceDigits);
+      req.deviation = (int)Slippage;
+
+      bool sent = OrderSend(req, res);
+      if(!sent || (res.retcode < 10000 || res.retcode > 10018))
+         PrintFormat("ApplyGlobalStopPrice: modify pending order %I64u failed ret=%d comment=%s", ordTicket, res.retcode, res.comment);
+      else
+         PrintFormat("ApplyGlobalStopPrice: modified pending order %I64u SL->%.10f", ordTicket, req.sl);
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Breakeven rule: for EA layer positions (magic == MagicNumber, not mainTicket) |
+//| If running price profit >= half TP (in price units) -> move SL to entry price |
+//| NOTE: This runs AFTER global SL is applied so that per-layer BE overrides the global SL for that position. |
+//+------------------------------------------------------------------+
+void CheckAndApplyBreakeven()
+{
+   double halfTPprice = ((double)TPpips / 2.0) * pipPrice;
+
+   double bid = SymbolInfoDouble(symbolName, SYMBOL_BID);
+   double ask = SymbolInfoDouble(symbolName, SYMBOL_ASK);
+
+   int posTotal = PositionsTotal();
+   for(int p=0; p<posTotal; p++)
+   {
+      ulong posTicket = PositionGetTicket(p);
+      if(posTicket == 0) continue;
+      if(!PositionSelectByTicket(posTicket)) continue;
+      if(PositionGetString(POSITION_SYMBOL) != symbolName) continue;
+
+      long posMagic = PositionGetInteger(POSITION_MAGIC);
+      if((ulong)posMagic != (ulong)MagicNumber) continue; // only EA-managed layer positions
+      if(posTicket == mainTicket) continue; // ensure not main (shouldn't have EA magic, but safe)
+
+      long ptype = PositionGetInteger(POSITION_TYPE);
+      double openP = PositionGetDouble(POSITION_PRICE_OPEN);
+      double curSL = PositionGetDouble(POSITION_SL);
+      double curTP = PositionGetDouble(POSITION_TP);
+
+      // If TP is 0 (unlikely for EA layers), compute expected TP from PipsToPrice on entry
+      if(curTP == 0.0)
+      {
+         if(ptype == POSITION_TYPE_BUY) curTP = openP + PipsToPrice(TPpips);
+         else curTP = openP - PipsToPrice(TPpips);
+      }
+
+      double curPrice = (ptype == POSITION_TYPE_BUY) ? ask : bid;
+      double priceDiff = (ptype == POSITION_TYPE_BUY) ? (curPrice - openP) : (openP - curPrice);
+
+      // only consider if TP distance is positive and priceDiff reached halfTP
+      if(priceDiff >= halfTPprice)
+      {
+         // Set new SL to exact entry price (with small safety offset if required by broker)
+         double newSL = NormalizeDouble(openP, priceDigits);
+
+         // Validate newSL relative to current SL to avoid moving SL in wrong direction
+         bool needModify = false;
+         if(ptype == POSITION_TYPE_BUY)
+         {
+            // For buy, SL must be below current price. Only move up if current SL is lower than entry
+            if(curSL < newSL - (pipPrice * 0.5))
+               needModify = true;
+         }
+         else // SELL
+         {
+            // For sell, SL must be above current price. Only move down if current SL is higher than entry or not set
+            if(curSL > newSL + (pipPrice * 0.5) || curSL == 0.0)
+               needModify = true;
+         }
+
+         if(needModify)
+         {
+            // Try to set SL to break-even entry price
+            bool ok = trade.PositionModify(posTicket, newSL, curTP);
+            if(ok) PrintFormat("Breakeven applied pos %I64u -> SL=%.10f", posTicket, newSL);
+            else PrintFormat("Breakeven FAILED pos %I64u -> attempted SL=%.10f", posTicket, newSL);
+         }
+      }
+   }
 }
 
 //+------------------------------------------------------------------+
@@ -75,6 +334,14 @@ void OnTick()
       {
          PrintFormat("Main manual trade detected: %I64u", mainTicket);
          PlaceAllLayers();
+
+         // compute & apply global SL immediately after placing layers
+         double globalSL = 0.0;
+         if(CalculateGlobalStopPrice(MaxLossPercent, globalSL))
+            ApplyGlobalStopPrice(globalSL);
+
+         // Now apply per-layer breakeven overrides if any layer already meets condition
+         CheckAndApplyBreakeven();
       }
    }
    else
@@ -90,6 +357,14 @@ void OnTick()
 
       // Ensure layers exist (re-place missing ones)
       ReplaceMissingLayers();
+
+      // recompute global SL and apply it first (so it remains the common SL baseline)
+      double globalSL = 0.0;
+      if(CalculateGlobalStopPrice(MaxLossPercent, globalSL))
+         ApplyGlobalStopPrice(globalSL);
+
+      // Then apply per-layer breakeven so qualifying layers override the common SL
+      CheckAndApplyBreakeven();
    }
 }
 
@@ -123,11 +398,27 @@ void OnTradeTransaction(const MqlTradeTransaction &trans,
          mainTicket = t;
          PrintFormat("OnTradeTransaction: new main manual trade detected: %I64u", mainTicket);
          PlaceAllLayers();
+
+         // compute & apply global SL immediately after placing layers
+         double globalSL = 0.0;
+         if(CalculateGlobalStopPrice(MaxLossPercent, globalSL))
+            ApplyGlobalStopPrice(globalSL);
+
+         // then apply breakeven (if some layers were instantly in-range)
+         CheckAndApplyBreakeven();
       }
    }
+   else
+   {
+      // If a pending order was filled/closed, ReplaceMissingLayers() on next tick will re-place
+      // Also recompute global SL on trade transaction to respond quickly to equity changes
+      double globalSL = 0.0;
+      if(CalculateGlobalStopPrice(MaxLossPercent, globalSL))
+         ApplyGlobalStopPrice(globalSL);
 
-   // Additionally, if a pending order got executed and closed on TP (deal), we'll let ReplaceMissingLayers()
-   // or the next transaction/tick re-place the pending order. We don't rely on transaction type enums here.
+      // after global SL update, try applying breakeven for any qualifying layers
+      CheckAndApplyBreakeven();
+   }
 }
 
 //+------------------------------------------------------------------+
@@ -192,6 +483,14 @@ void PlaceAllLayers()
             PrintFormat("Placed layer %d -> type=%d price=%.10f lot=%.2f tp=%.10f", layer, (int)orderType, NormalizeDouble(price, priceDigits), lot, NormalizeDouble(tp, priceDigits));
       }
    }
+
+   // Recompute & apply global SL after placing layers
+   double globalSL = 0.0;
+   if(CalculateGlobalStopPrice(MaxLossPercent, globalSL))
+      ApplyGlobalStopPrice(globalSL);
+
+   // Apply breakeven overrides if any (rare immediately after placement but safe)
+   CheckAndApplyBreakeven();
 }
 
 //+------------------------------------------------------------------+
@@ -231,6 +530,14 @@ void ReplaceMissingLayers()
             PrintFormat("Replaced missing layer at price=%.10f lot=%.2f", NormalizeDouble(price, priceDigits), lot);
       }
    }
+
+   // Recompute & apply global SL after replacing layers
+   double globalSL = 0.0;
+   if(CalculateGlobalStopPrice(MaxLossPercent, globalSL))
+      ApplyGlobalStopPrice(globalSL);
+
+   // Apply breakeven overrides if any
+   CheckAndApplyBreakeven();
 }
 
 //+------------------------------------------------------------------+
