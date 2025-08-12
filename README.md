@@ -132,7 +132,6 @@ Total Commission: XX.XX
 
 ## 📊 Example Flow
 
-```mermaid
 flowchart TD
     A[Manual Trade Opened] --> B[EA Detects Main Trade]
     B --> C[Places All Layers]
