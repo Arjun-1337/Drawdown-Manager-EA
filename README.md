@@ -2,7 +2,6 @@
 
 ![Version](https://img.shields.io/badge/version-1.20-blue.svg)  
 ![Platform](https://img.shields.io/badge/platform-MetaTrader5-green.svg)
-![Logo](https://via.placeholder.com/150x150.png?text=DDM+Logo)
 
 ---
 
