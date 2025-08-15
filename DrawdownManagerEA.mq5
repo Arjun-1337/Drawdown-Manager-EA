@@ -8,25 +8,26 @@
 
 #include <Trade\Trade.mqh>
 
-// -------------------- Embedded License Verifier (no #include) --------------------
-// LicenseVerifier: payload-based Base64 license with HMAC-SHA256 verification
-// Keep EA_SECRET_KEY identical to the secret used by your license generator.
-#define EA_SECRET_KEY "Insert Key"
+// -------------------- Embedded License Verifier (pure MQL5) --------------------
+// Payload-based Base64 license with HMAC-SHA256 verification
+// Keep EA_SECRET_KEY identical to your generator secret (byte-for-byte).
+#define EA_SECRET_KEY "mp4K8tM3bV"
 
 struct LicenseInfo
 {
    bool   valid;
    string raw_payload; // JSON string
    string account_id;
+   string client_name; // optional
    string plan;
    string expiry;      // "YYYY-MM-DD" or "lifetime"
-   string client_name; // optional
    string error;       // non-empty when valid==false
 };
 
 // -------------------- helpers (bytes/strings) ----------------------
 void StringToUtf8Bytes(const string s, uchar &out[])
 {
+   // fills out[] with UTF-8 bytes (no trailing 0)
    ArrayResize(out,0);
    StringToCharArray(s, out, 0, WHOLE_ARRAY, CP_UTF8);
    int n = ArraySize(out);
@@ -78,7 +79,7 @@ string TrimWhite(const string s)
    return StringSubstr(s, i, j-i+1);
 }
 
-// Base64 decode using CryptDecode. returns true on success and fills out[]
+// Base64 decode using CryptDecode. returns true on success and fills out[].
 bool Base64DecodeString(const string b64, uchar &out[])
 {
    uchar in[], key_empty[];
@@ -205,9 +206,9 @@ LicenseInfo VerifyAndParseLicense(const string base64_license)
    info.valid = false;
    info.raw_payload = "";
    info.account_id  = "";
+   info.client_name = "";
    info.plan        = "";
    info.expiry      = "";
-   info.client_name = "";
    info.error       = "";
 
    string trimmed = TrimWhite(base64_license);
@@ -259,23 +260,24 @@ LicenseInfo VerifyAndParseLicense(const string base64_license)
    }
 
    // Parse JSON fields
-   string acc="", plan="", expiry="", client="";
+   string acc="", client="", plan="", expiry="";
    bool okA = JsonGetString(payload, "account_id", acc);
    bool okP = JsonGetString(payload, "plan",       plan);
    bool okE = JsonGetString(payload, "expiry",     expiry);
-   JsonGetString(payload, "client_name", client); // optional
+   // client_name is optional
+   bool okC = JsonGetString(payload, "client_name", client);
 
    if(!(okA && okP && okE))
    {
-      info.error = "Failed to parse payload JSON";
+      info.error = "Failed to parse payload JSON (account_id/plan/expiry required)";
       return info;
    }
 
    info.raw_payload = payload;
    info.account_id  = acc;
+   info.client_name = (okC ? client : "");
    info.plan        = plan;
    info.expiry      = expiry;
-   info.client_name = client;
 
    // Account binding (0 => any)
    long login = (long)AccountInfoInteger(ACCOUNT_LOGIN);
@@ -309,8 +311,8 @@ LicenseInfo VerifyAndParseLicense(const string base64_license)
    info.valid = true;
    return info;
 }
-// -------------------- End Embedded License Verifier --------------------
 
+// -------------------- End License Verifier ------------------------------------
 
 //--------------------------- Inputs --------------------------------
 input uint    MagicNumber         = 133700;       // Magic for EA orders (0 => check all)
@@ -323,9 +325,8 @@ input uint    Slippage            = 10;           // slippage in points
 input double  MaxLossPercent      = 0.20;         // maximum allowed total loss as percent of equity (0.20 => 20%)
 input double  TargetProfitPerDay  = 100.0;        // profit target (account currency) - evaluated vs balance when first manual trade opens
 
-// License inputs
-input string  LicenseKey          = "";           // Paste Base64 license string here
-input bool    RequireLicense      = true;         // If true, EA won't run trading logic unless license valid
+// New input: License key (Base64 payload.signature)
+input string  LicenseKey          = "";           // Paste your license key here
 
 //----------------------- Dashboard settings ------------------------
 #define EA_VERSION_STR "2.1"
@@ -333,8 +334,8 @@ string  DASH_PANEL_NAME = "DDM_Panel";
 int     DASH_X = 300;     // distance from right edge (dashboard anchored right-upper)
 int     DASH_Y = 50;      // distance from top (placed under header near right)
 int     DASH_W = 320;
-int     DASH_H = 260;
-int     DASH_LABELS = 17; // increased to include license fields (L0..L16)
+int     DASH_H = 340;
+int     DASH_LABELS = 18; // number of labels inside panel (L0..L17) - increased to accommodate license info
 
 //--------------------------- Globals --------------------------------
 CTrade trade;
@@ -357,10 +358,8 @@ bool   StopBreakeven = false;
 // Strategy tester seed control
 bool   TesterSeedOpened = false;
 
-// License state
-LicenseInfo GlobalLicense;
-bool        LicenseChecked = false;
-bool        LicenseValid   = false;
+// License global
+LicenseInfo g_license;
 
 //--------------------------- Utilities ------------------------------
 double PipsToPrice(int pips) { return (double)pips * pipPrice; }
@@ -373,37 +372,6 @@ void EnsureTesterSeedTrade();
 void EnforceNoTPOnEATrades(); // (kept for compatibility; no longer used after changes)
 bool CalculateGlobalBreakevenTP(double &outTP, long &outSide);
 void ApplyGlobalBreakevenTP();
-void CheckLicense();
-
-//-------------------------------------------------------------------
-// License check wrapper
-//-------------------------------------------------------------------
-void CheckLicense()
-{
-   LicenseChecked = true;
-   GlobalLicense.valid = false;
-   GlobalLicense.raw_payload = "";
-   GlobalLicense.account_id = "";
-   GlobalLicense.plan = "";
-   GlobalLicense.expiry = "";
-   GlobalLicense.client_name = "";
-   GlobalLicense.error = "";
-
-   string lk = TrimWhite(LicenseKey);
-   if(StringLen(lk) == 0)
-   {
-      GlobalLicense.error = "No license key provided";
-      LicenseValid = false;
-      return;
-   }
-
-   GlobalLicense = VerifyAndParseLicense(lk);
-   LicenseValid = GlobalLicense.valid;
-   if(!LicenseValid)
-      PrintFormat("License check failed: %s", GlobalLicense.error);
-   else
-      PrintFormat("License OK for account %s plan=%s expiry=%s client=%s", GlobalLicense.account_id, GlobalLicense.plan, GlobalLicense.expiry, GlobalLicense.client_name);
-}
 
 //-------------------------------------------------------------------
 // CalculateGlobalStopPrice
@@ -892,32 +860,44 @@ void UpdateDashboard()
    string beStatus = StopBreakeven ? "OFF (global TP mode)" : "ON";
    ObjectSetString(0, "DDM_L12", OBJPROP_TEXT, "Breakeven: " + beStatus + "  |  Ver: " + EA_VERSION_STR);
 
-   // License Info in dashboard
-   string licStatus = "Not checked";
-   int licColor = clrYellow;
-   if(LicenseChecked)
+   // --- License related fields (L13..L17) ---
+   // L13: License status (Valid / Invalid)
+   if(g_license.valid)
    {
-      if(LicenseValid) { licStatus = "VALID"; licColor = clrLime; }
-      else             { licStatus = "INVALID"; licColor = clrRed; }
+      ObjectSetString(0, "DDM_L13", OBJPROP_TEXT, "License: VALID");
+      ObjectSetInteger(0, "DDM_L13", OBJPROP_COLOR, clrLime);
    }
    else
    {
-      licStatus = "Not checked";
-      licColor = clrYellow;
+      // show brief error if available
+      string err = (StringLen(g_license.error) > 0 ? g_license.error : "Not provided");
+      ObjectSetString(0, "DDM_L13", OBJPROP_TEXT, "License: INVALID");
+      ObjectSetInteger(0, "DDM_L13", OBJPROP_COLOR, clrRed);
+      // Optionally show small error in L14 if not bound by space
+      ObjectSetString(0, "DDM_L14", OBJPROP_TEXT, "Err: " + err);
+      ObjectSetInteger(0, "DDM_L14", OBJPROP_COLOR, clrOrange);
+      // fill remaining L15..L17 with N/A
+      ObjectSetString(0, "DDM_L15", OBJPROP_TEXT, "Account ID: N/A");
+      ObjectSetString(0, "DDM_L16", OBJPROP_TEXT, "Client: N/A");
+      ObjectSetString(0, "DDM_L17", OBJPROP_TEXT, "Plan: N/A  |  Expiry: N/A");
+      ObjectSetInteger(0, "DDM_L15", OBJPROP_COLOR, clrWhite);
+      ObjectSetInteger(0, "DDM_L16", OBJPROP_COLOR, clrWhite);
+      ObjectSetInteger(0, "DDM_L17", OBJPROP_COLOR, clrWhite);
+      return;
    }
-   if(!RequireLicense) { licStatus = licStatus + " (not required)"; licColor = clrAqua; }
 
-   ObjectSetString(0, "DDM_L13", OBJPROP_TEXT, "License: " + licStatus);
-   ObjectSetInteger(0, "DDM_L13", OBJPROP_COLOR, licColor);
+   // If valid, display the decoded fields:
+   ObjectSetString(0, "DDM_L14", OBJPROP_TEXT, "Account ID: " + (StringLen(g_license.account_id) ? g_license.account_id : "0"));
+   ObjectSetInteger(0, "DDM_L14", OBJPROP_COLOR, clrWhite);
 
-   string clientName = (StringLen(GlobalLicense.client_name) > 0 ? GlobalLicense.client_name : "N/A");
-   ObjectSetString(0, "DDM_L14", OBJPROP_TEXT, "Client: " + clientName);
+   ObjectSetString(0, "DDM_L15", OBJPROP_TEXT, "Client: " + (StringLen(g_license.client_name) ? g_license.client_name : "N/A"));
+   ObjectSetInteger(0, "DDM_L15", OBJPROP_COLOR, clrWhite);
 
-   string planText = (StringLen(GlobalLicense.plan) > 0 ? GlobalLicense.plan : "N/A");
-   ObjectSetString(0, "DDM_L15", OBJPROP_TEXT, "Plan: " + planText);
+   ObjectSetString(0, "DDM_L16", OBJPROP_TEXT, "Plan: " + (StringLen(g_license.plan) ? g_license.plan : "N/A"));
+   ObjectSetInteger(0, "DDM_L16", OBJPROP_COLOR, clrWhite);
 
-   string expiryText = (StringLen(GlobalLicense.expiry) > 0 ? GlobalLicense.expiry : "N/A");
-   ObjectSetString(0, "DDM_L16", OBJPROP_TEXT, "Expiry: " + expiryText);
+   ObjectSetString(0, "DDM_L17", OBJPROP_TEXT, "Expiry: " + (StringLen(g_license.expiry) ? g_license.expiry : "N/A"));
+   ObjectSetInteger(0, "DDM_L17", OBJPROP_COLOR, clrWhite);
 }
 
 //-------------------------------------------------------------------
@@ -1033,6 +1013,26 @@ void CheckAndEnforceDailyTarget()
 //-------------------------------------------------------------------
 int OnInit()
 {
+   // --- LICENSE CHECK (first thing) ---
+   g_license = VerifyAndParseLicense(LicenseKey);
+
+   if(StringLen(TrimWhite(LicenseKey)) == 0)
+   {
+      Alert("License Key missing. Please paste your license key in EA inputs.");
+      Print("License Key missing. Initialization aborted.");
+      return(INIT_FAILED);
+   }
+
+   if(!g_license.valid)
+   {
+      // Show popup and refuse to initialize
+      string msg = "License validation failed: " + g_license.error;
+      Alert(msg);
+      Print(msg);
+      return(INIT_FAILED);
+   }
+
+   // If we reach here, license is valid. Proceed with normal initialization.
    symbolName   = _Symbol;
    priceDigits  = (int)SymbolInfoInteger(symbolName, SYMBOL_DIGITS);
 
@@ -1047,8 +1047,8 @@ int OnInit()
    PrintFormat("Drawdown Manager EA by Arjun1337 initialized for %s (digits=%d, volDigits=%d, pipPrice=%.10f, SL_tol=%.10f)",
                symbolName, priceDigits, volumeDigits, pipPrice, SL_MATCH_TOLERANCE);
 
-   // Check license first
-   CheckLicense();
+   PrintFormat("License valid for account_id=%s plan=%s expiry=%s client=%s",
+               g_license.account_id, g_license.plan, g_license.expiry, (StringLen(g_license.client_name)?g_license.client_name:"N/A"));
 
    CreateDashboard();
    UpdateDashboard();
@@ -1063,16 +1063,6 @@ void OnDeinit(const int reason)
 
 void OnTick()
 {
-   // Ensure license checked once
-   if(!LicenseChecked) CheckLicense();
-
-   // If license is required but invalid, do not perform trading operations (dashboard still updates)
-   if(RequireLicense && !LicenseValid)
-   {
-      UpdateDashboard();
-      return;
-   }
-
    // Seed a "manual-like" trade in Strategy Tester only (does not run live)
    EnsureTesterSeedTrade();
 
@@ -1157,10 +1147,6 @@ void OnTradeTransaction(const MqlTradeTransaction &trans,
                         const MqlTradeRequest &request,
                         const MqlTradeResult &result)
 {
-   // License gating
-   if(!LicenseChecked) CheckLicense();
-   if(RequireLicense && !LicenseValid) { UpdateDashboard(); return; }
-
    if(mainTicket != 0)
    {
       if(!PositionSelectByTicket(mainTicket))
@@ -1243,8 +1229,6 @@ ulong DetectFirstManualPosition()
 
 void PlaceAllLayers()
 {
-   if(RequireLicense && !LicenseValid) return; // license gating
-
    if(mainTicket == 0 || !PositionSelectByTicket(mainTicket)) return;
 
    long   posType    = PositionGetInteger(POSITION_TYPE);
@@ -1299,8 +1283,6 @@ void PlaceAllLayers()
 
 void ReplaceMissingLayers()
 {
-   if(RequireLicense && !LicenseValid) return; // license gating
-
    if(mainTicket == 0 || !PositionSelectByTicket(mainTicket)) return;
 
    long   posType    = PositionGetInteger(POSITION_TYPE);
