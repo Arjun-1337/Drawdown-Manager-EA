@@ -1,15 +1,16 @@
 # 📉 Drawdown Manager EA by Arjun1337
 
-![Version](https://img.shields.io/badge/version-1.20-blue.svg)  
+![Version](https://img.shields.io/badge/version-1.30-blue.svg)  
 ![Platform](https://img.shields.io/badge/platform-MetaTrader5-green.svg)
 
 ---
 
 ## 🚀 Overview
 
-**Drawdown Manager EA** is an advanced MetaTrader 5 Expert Advisor designed to **strategically manage drawdowns by layering trades** around a manually initiated position. This EA automates pending orders (layers) to optimize average entry price, protect equity with a global stop loss, and lock in risk-free trades using dynamic breakeven logic.
+**Drawdown Manager EA** is an advanced MetaTrader 5 Expert Advisor designed to **strategically manage drawdowns by layering trades** around a manually initiated position. This EA automates pending orders (layers) to optimize average entry price, protect equity with a global stop loss, and lock in risk-free trades using **tiered breakeven logic**.
 
-Developed with a robust, scalable architecture, this EA ensures disciplined trade management aligned with professional trading objectives.
+This version also introduces a **Global Take-Profit Aggregation System** that consolidates all open layers into a single TP when targets are hit, ensuring maximum efficiency and **0$ drawdown exits**.  
+In addition, it comes with a **secure payload-based license verification system** to protect your IP and control distribution.
 
 ---
 
@@ -17,104 +18,72 @@ Developed with a robust, scalable architecture, this EA ensures disciplined trad
 
 - **Automatic Detection of Manual Trades** — Monitors for manually opened trades (magic number = 0) and takes over position management.
 - **Layered Order Placement** — Multiple pending limit orders at fixed pip distances with increasing lot sizes.
-- **Individual Take Profit for Each Layer** — Ensures structured exit points.
-- **Per-Layer Breakeven** — When a layer reaches halfway to TP, SL moves to entry for risk-free profit locking.
+- **Individual Take Profit for Each Layer** — Ensures structured exit points until global TP mode is activated.
+- **Tiered Breakeven System**:
+  - **First stage:** Locks breakeven at **+40%** when price reaches **+60%** of TP target.
+  - **Second stage:** Moves breakeven to **+70%** when price reaches **+90%** of TP target.
+- **Global TP Mode**:
+  - When the profit target is reached, EA switches from per-layer TP to a **single aggregated TP** for all open positions.
+  - Recalculates TP dynamically if new layers open, keeping total floating PnL at **0$ drawdown**.
 - **Global Equity Stop Loss** — Calculates the price where total open position loss equals a fixed % of account equity (default 20%) and sets SL for all trades.
 - **Dynamic Layer Replacement** — Replaces filled or canceled layers until the main trade is closed.
 - **Clean-Up Logic** — Removes all EA orders when the main trade closes.
+- **Secure License Verification** — HMAC-SHA256 signed license keys with account binding and expiry checks.
 - **Pure MQL5 Implementation** — No external dependencies.
 
 ---
 
-## 🧠 Algorithm Overview
+## 🛡 License System
 
-1. **Manual Trade Detection**  
-   Detects any manual position on the chart’s symbol with magic number 0 and sets it as `mainTicket`.
+### 🔹 How It Works
+- Each license contains a **Base64-encoded payload**:
+  ```json
+  {
+    "account_id": 12345678,
+    "plan": "pro",
+    "expiry": "2025-12-31"
+  }
+Payload is signed with a secret key using HMAC-SHA256.
 
-2. **Layer Placement**  
-   - Places limit orders at `PipDistance` from the main trade.  
-   - Lot size = `BaseLotSize × LayerNumber`.  
-   - Each layer has a fixed TP distance.
+EA verifies:
 
-3. **Global Stop Loss**  
-   - Calculates the price where **closing all trades** would result in `EquityRiskPercent` loss of total equity.  
-   - Sets this as SL for **all positions** (manual + EA).
+Account binding
+Expiry date
+Payload integrity
 
-4. **Per-Layer Breakeven**  
-   - If price reaches **halfway to TP**, the layer’s SL is moved to entry price.  
-   - This happens without changing the global SL for other positions.
+If license is invalid, the EA halts operations.
 
-5. **Ongoing Monitoring**  
-   - On every tick, EA re-checks:  
-     - Layer placement.  
-     - Global SL level.  
-     - Breakeven conditions.  
-   - Replaces missing layers when needed.
+🧠 Algorithm Overview
+Manual Trade Detection
+Detects any manual position on the chart’s symbol with magic number 0 and sets it as mainTicket.
 
-6. **Cleanup**  
-   - When the main trade is closed, all EA orders are canceled.
-  
-   - 
----
+Layer Placement
+Places limit orders at PipDistance from the main trade.
+Lot size = BaseLotSize × LayerNumber.
+Each layer has a fixed TP distance (unless in global TP mode).
+Global Stop Loss
+Calculates the price where closing all trades would result in EquityRiskPercent loss of total equity.
+Sets this as SL for all positions (manual + EA).
+Tiered Breakeven
+If price reaches 60% of TP → SL moves to lock 40% profit.
+If price reaches 90% of TP → SL moves to lock 70% profit.
 
-### 🛡 Drawdown Protection
-- Calculates **global stop price** based on your equity and maximum allowed loss percentage.
-- Automatically **applies SL adjustments** to all open trades & pending orders to cap losses.
-- Excludes **profit-locked trades** from global stop loss adjustments.
+Global TP Activation
 
-### 💰 Profit Lock & Breakeven
-- Monitors all EA-managed trades.
-- **Locks 40% of Take Profit distance** once price reaches 60% of TP target.
-- Automatically moves Stop Loss to secure profits without interfering in early trade stages.
+If profit target hits → switch to aggregated TP mode.
+Calculate a single TP for all open positions at 0$ drawdown.
+Adjust TP if more layers open.
+Ongoing Monitoring
+On every tick, EA re-checks:
+Layer placement
+Global SL level
+Breakeven & TP conditions
+Replaces missing layers when needed.
+Cleanup
 
-### 📊 Real-Time Dashboard
-- Displays:
-  - EA Status (Active/Inactive)
-  - Balance / Equity
-  - Daily, Weekly, and Monthly P&L
-  - Active symbol
-  - Total lots traded
-  - Total commission paid
-  - Current version & author branding
-- Fully auto-refreshing on-chart interface.
+When the main trade is closed, all EA orders are canceled.
 
-### 🎯 Daily Profit Target Enforcement
-- Stops trading for the day when **net profit (closed + floating)** reaches target.
-- Immediately closes all trades and removes pending orders upon hitting target.
-
-### 🔄 Emergency Close All
-- One-click (or automated trigger) close of **all positions & orders**.
-- Instant risk-off mode for volatile markets or news events.
-
-### 🧮 Historical & Floating PnL Tracking
-- Tracks closed profit:
-  - **Today**
-  - **This Week**
-  - **This Month**
-- Tracks total lots traded & commission paid.
-- Calculates floating profit for all open trades.
-
----
-
-## ⚙️ Input Parameters
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `MagicNumber` | `uint` | Magic number for EA-managed trades (0 = all trades) |
-| `BaseLotSize` | `double` | Base lot for first layer |
-| `PipDistance` | `int` | Distance between layered entries (pips) |
-| `TPpips` | `int` | Take profit per layer (pips) |
-| `MaxLayers` | `int` | Maximum layers allowed |
-| `CommentTag` | `string` | Comment tag for orders |
-| `Slippage` | `uint` | Max slippage (points) |
-| `MaxLossPercent` | `double` | Max allowed equity drawdown % |
-| `TargetProfitPerDay` | `double` | Daily net profit target (account currency) |
-
----
-
-## 📟 Dashboard Layout
-The EA creates a **rectangle panel** with dynamic labels:
-
+📟 Dashboard Layout
 Drawdown Manager
 by Arjun1337
 Algo Status: Active/Inactive
@@ -128,106 +97,56 @@ Version: X.X
 Total Lots: XX.XX
 Total Commission: XX.XX
 
----
+⚙️ Input Parameters
+Parameter	Type	Description
+MagicNumber	uint	Magic number for EA-managed trades (0 = all trades)
+BaseLotSize	double	Base lot for first layer
+PipDistance	int	Distance between layered entries (pips)
+TPpips	int	Take profit per layer (pips)
+MaxLayers	int	Maximum layers allowed
+CommentTag	string	Comment tag for orders
+Slippage	uint	Max slippage (points)
+MaxLossPercent	double	Max allowed equity drawdown %
+TargetProfitPerDay	double	Daily net profit target (account currency)
+LicenseKey	string	Base64-encoded license key for verification
 
-# 📊 Example Flow
+📂 File Structure
+bash
+Copy
+Edit
+📁 MQL5
+ ├── Experts
+ │   ├── DrawdownManagerEA.mq5   # Main EA file
+ │
+ ├── Include
+ │   ├── LicenseVerifier.mqh     # License validation module
+ │
+ ├── Scripts
+ │   └── LicenseGenerator.py     # Python script for generating keys
+🚦 Installation & Usage
+Copy .mq5 file into MQL5/Experts/
 
-**Step-by-Step Process:**
-1. **Manual Trade Opened** → EA detects the main trade.
-2. **EA Places All Layers** according to parameters.
-3. **Price Moves Against Main Trade** → Layers get triggered.
-4. **Price Retraces Halfway to TP** → Stop Loss moves to breakeven.
-5. **Outcome**:
-   - If price reaches TP or breakeven → Process resets.
-   - If drawdown continues → Global SL is hit and all trades are closed.
+Copy LicenseVerifier.mqh into MQL5/Include/
 
----
+Compile via MetaEditor
 
-## 💡 Use Case & Benefits
-- **Drawdown Control** — Smooths volatility impact via averaging.  
-- **Risk-Free Trades** — Breakeven locking removes downside risk mid-trade.  
-- **Hands-Off Layer Management** — Fully automated after the initial manual trade.  
-- **Capital Protection** — Global SL ensures losses remain within defined limits.  
+Attach to chart and enter LicenseKey in inputs
 
----
+Open a manual trade (magic number = 0) and let EA handle layers, SL, and TP automatically
 
-## 📈 Performance Notes
-- Works best on liquid pairs with consistent volatility.  
-- Must be paired with a sound entry strategy.  
-- Test thoroughly in demo before live use.  
+📜 License
+© 2025 Arjun1337 — All Rights Reserved.
+Unauthorized copying, modification, or redistribution is prohibited.
 
----
-
-## 📂 File Structure
-- `DrawdownManagerEA.mq5` — Core EA source file.  
-
----
-
-## 🚦 Installation & Usage
-1. Copy `.mq5` file into `MQL5/Experts/`  
-2. Compile via **MetaEditor**.  
-3. Attach to the desired chart.  
-4. Configure input parameters.  
-5. Open a manual trade (magic number `0`).  
-6. Let the EA manage layers, SL, and breakeven automatically.  
-
-> PRs welcome.
-
----
-
-## 📞 Contact
-- **Twitter:** [@Arjun1337](https://twitter.com/Arjun1337)  
-- **LinkedIn:** [Arjun Ashtankar](https://linkedin.com/in/arjun-ashtankar)  
-- **Email:** arjun@arjun.media  
-
-🔹 *Power your trades with discipline & precision — because winning is a system, not luck.*
+🏆 Trader's Edge
+“The market rewards discipline — not hope. The Drawdown Manager EA is your silent enforcer.”
 
 ---
 
-## 📌 Best Practices
-- Use on **one chart per account** to avoid duplicate SL updates.  
-- Set realistic `MaxLossPercent` and `TargetProfitPerDay`.  
-- Combine with a trusted entry strategy — this EA focuses on **management**, not signals.  
+If you want, I can also make a **visual architecture diagram** showing:  
+- Layer flow  
+- Tiered breakeven progression  
+- Switch to global TP  
+- License check process  
 
----
-
-## 🧠 How It Works (Algorithm Flow)
-1. **Initialization**
-   - Detects symbol specs, tick size/value, pip size, digits.
-   - Prepares dashboard UI.
-
-2. **Drawdown Monitoring**
-   - Continuously calculates **stop price** for all positions.
-   - Updates SL levels if equity drawdown exceeds threshold.
-
-3. **Profit Locking**
-   - For each trade:
-     - If price hits 60% of TP → Move SL to lock 40% profit.
-
-4. **Daily Target Enforcement**
-   - Checks net daily profit.
-   - If reached → Close all & remove pending orders.
-
-5. **Dashboard Updates**
-   - Every tick refreshes PnL, status, and account stats.
-
----
-
-## 📜 License
-© 2025 **Arjun1337** — All Rights Reserved.  
-This EA is provided **"as-is"** without warranty. Use at your own risk.
-
----
-
-## 🤝 Contributions & Support
-Open a **GitHub issue** for bug reports or feature requests.
-
----
-
-### 🏆 Trader's Edge
-> “The market rewards discipline — not hope. The Drawdown Manager EA is your silent enforcer.”
-
----
-
-![Footer Logo](https://via.placeholder.com/250x80.png?text=Arjun1337+Trading+Tools)
-
+That would make the GitHub page look extremely professional and “enterprise-ready.” Would you like me to prepare that next?
